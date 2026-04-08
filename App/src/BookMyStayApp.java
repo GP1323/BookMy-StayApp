@@ -1,18 +1,13 @@
+import java.io.*;
 import java.util.*;
 
-class Reservation {
-    private String reservationId;
+class Reservation implements Serializable {
     private String guestName;
     private String roomType;
 
-    public Reservation(String reservationId, String guestName, String roomType) {
-        this.reservationId = reservationId;
+    public Reservation(String guestName, String roomType) {
         this.guestName = guestName;
         this.roomType = roomType;
-    }
-
-    public String getReservationId() {
-        return reservationId;
     }
 
     public String getGuestName() {
@@ -22,113 +17,88 @@ class Reservation {
     public String getRoomType() {
         return roomType;
     }
+
+    public String toString() {
+        return guestName + " (" + roomType + ")";
+    }
 }
 
-class RoomInventory {
-    private Map<String, Integer> inventory;
+class RoomInventory implements Serializable {
+    private Map<String, Integer> inventory = new HashMap<>();
 
     public RoomInventory() {
-        inventory = new HashMap<>();
-        inventory.put("Single", 1);
+        inventory.put("Single", 2);
         inventory.put("Double", 1);
-        inventory.put("Suite", 1);
     }
 
-    public void increment(String roomType) {
-        inventory.put(roomType, inventory.getOrDefault(roomType, 0) + 1);
-    }
-
-    public void decrement(String roomType) {
-        inventory.put(roomType, inventory.get(roomType) - 1);
-    }
-
-    public int getAvailability(String roomType) {
-        return inventory.getOrDefault(roomType, 0);
-    }
-}
-
-class BookingHistory {
-    private Map<String, Reservation> bookings;
-
-    public BookingHistory() {
-        bookings = new HashMap<>();
-    }
-
-    public void addReservation(Reservation reservation) {
-        bookings.put(reservation.getReservationId(), reservation);
-    }
-
-    public Reservation getReservation(String reservationId) {
-        return bookings.get(reservationId);
-    }
-
-    public void removeReservation(String reservationId) {
-        bookings.remove(reservationId);
-    }
-
-    public boolean exists(String reservationId) {
-        return bookings.containsKey(reservationId);
-    }
-}
-
-class CancellationService {
-    private RoomInventory inventory;
-    private BookingHistory history;
-    private Stack<String> rollbackStack;
-
-    public CancellationService(RoomInventory inventory, BookingHistory history) {
-        this.inventory = inventory;
-        this.history = history;
-        rollbackStack = new Stack<>();
-    }
-
-    public void cancel(String reservationId) {
-        if (!history.exists(reservationId)) {
-            System.out.println("Cancellation Failed | Reservation not found: " + reservationId);
-            return;
+    public boolean allocateRoom(String roomType) {
+        int available = inventory.getOrDefault(roomType, 0);
+        if (available > 0) {
+            inventory.put(roomType, available - 1);
+            return true;
         }
-
-        Reservation reservation = history.getReservation(reservationId);
-        String roomType = reservation.getRoomType();
-
-        rollbackStack.push(reservationId);
-        inventory.increment(roomType);
-        history.removeReservation(reservationId);
-
-        System.out.println("Cancellation Successful for " + reservation.getGuestName() +
-                " | Room Type: " + roomType + " | Reservation ID: " + reservationId);
+        return false;
     }
 
-    public void showRollbackStack() {
-        System.out.println("Rollback Stack: " + rollbackStack);
+    public void releaseRoom(String roomType) {
+        int available = inventory.getOrDefault(roomType, 0);
+        inventory.put(roomType, available + 1);
+    }
+
+    public String toString() {
+        return inventory.toString();
+    }
+}
+
+class PersistenceService {
+    public static void saveState(RoomInventory inventory, List<Reservation> history, String filePath) {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(filePath))) {
+            out.writeObject(inventory);
+            out.writeObject(history);
+        } catch (IOException e) {
+            System.out.println("Error saving state: " + e.getMessage());
+        }
+    }
+
+    public static Object[] loadState(String filePath) {
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(filePath))) {
+            RoomInventory inventory = (RoomInventory) in.readObject();
+            List<Reservation> history = (List<Reservation>) in.readObject();
+            return new Object[]{inventory, history};
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("No previous state found or failed to load. Starting fresh.");
+            return null;
+        }
     }
 }
 
 public class BookMyStayApp {
     public static void main(String[] args) {
-        String appName = "Book My Stay";
-        String version = "v10.0";
+        String filePath = "bookingState.dat";
 
-        System.out.println("Welcome to " + appName);
-        System.out.println("Hotel Booking System " + version);
+        Object[] state = PersistenceService.loadState(filePath);
+        RoomInventory inventory;
+        List<Reservation> bookingHistory;
 
-        RoomInventory inventory = new RoomInventory();
-        BookingHistory history = new BookingHistory();
+        if (state != null) {
+            inventory = (RoomInventory) state[0];
+            bookingHistory = (List<Reservation>) state[1];
+            System.out.println("Restored previous state.");
+        } else {
+            inventory = new RoomInventory();
+            bookingHistory = new ArrayList<>();
+            System.out.println("Initialized fresh state.");
+        }
 
-        Reservation r1 = new Reservation("S1", "Alice", "Single");
-        Reservation r2 = new Reservation("D1", "Bob", "Double");
+        Reservation r1 = new Reservation("Alice", "Single");
+        if (inventory.allocateRoom(r1.getRoomType())) bookingHistory.add(r1);
+        Reservation r2 = new Reservation("Bob", "Double");
+        if (inventory.allocateRoom(r2.getRoomType())) bookingHistory.add(r2);
 
-        history.addReservation(r1);
-        history.addReservation(r2);
+        System.out.println("Current Inventory: " + inventory);
+        System.out.println("Booking History: " + bookingHistory);
 
-        inventory.decrement("Single");
-        inventory.decrement("Double");
-
-        CancellationService service = new CancellationService(inventory, history);
-
-        service.cancel("S1");
-        service.cancel("X1");
-
-        service.showRollbackStack();
+        PersistenceService.saveState(inventory, bookingHistory, filePath);
+        System.out.println("State saved. Application can be restarted safely.");
     }
 }
